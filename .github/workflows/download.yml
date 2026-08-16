@@ -29,7 +29,7 @@ jobs:
       - name: Install tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y aria2 p7zip-full
+          sudo apt-get install -y aria2
 
       - name: Show settings
         run: |
@@ -46,7 +46,7 @@ jobs:
         run: |
           set -e
 
-          mkdir -p output
+          mkdir -p download
 
           aria2c \
             --continue=true \
@@ -59,7 +59,8 @@ jobs:
             --connect-timeout=30 \
             --summary-interval=5 \
             --file-allocation=none \
-            --dir=output \
+            --allow-overwrite=true \
+            --dir=download \
             "${{ inputs.url }}"
 
       - name: Find downloaded file
@@ -67,113 +68,158 @@ jobs:
         run: |
           set -e
 
-          FILE=$(find output -type f ! -name '*.aria2' | head -n 1)
+          FILE=$(find download -type f ! -name '*.aria2' | head -n 1)
 
           if [ -z "$FILE" ]; then
             echo "ERROR: No downloaded file found."
             exit 1
           fi
 
-          echo "Downloaded file:"
-          ls -lh "$FILE"
+          FILE_NAME=$(basename "$FILE")
+          FILE_SIZE=$(stat -c%s "$FILE")
+
+          echo "================================"
+          echo "DOWNLOAD COMPLETE"
+          echo "================================"
+          echo "File: $FILE_NAME"
+          echo "Size: $FILE_SIZE bytes"
+          echo "Size: $(du -h "$FILE" | cut -f1)"
+          echo "================================"
 
           echo "FILE=$FILE" >> "$GITHUB_ENV"
+          echo "FILE_NAME=$FILE_NAME" >> "$GITHUB_ENV"
+          echo "FILE_SIZE=$FILE_SIZE" >> "$GITHUB_ENV"
+
+      - name: Prepare file structure
+        shell: bash
+        run: |
+          set -e
+
+          mkdir -p artifact/file
+          mkdir -p artifact/file/parts
+
+          # Keep the original file completely untouched.
+          cp -- "$FILE" "artifact/file/$FILE_NAME"
 
       - name: Split file
         shell: bash
         run: |
           set -e
 
-          mkdir -p parts
+          PART_SIZE="${{ inputs.part_size }}M"
 
-          SIZE="${{ inputs.part_size }}M"
-
-          echo "Splitting:"
-          echo "$FILE"
-          echo "Part size: $SIZE"
+          echo "================================"
+          echo "SPLITTING"
+          echo "================================"
+          echo "Source: $FILE"
+          echo "Part size: $PART_SIZE"
+          echo "================================"
 
           split \
-            -b "$SIZE" \
+            -b "$PART_SIZE" \
             -d \
             -a 4 \
             "$FILE" \
-            "parts/part-"
+            "artifact/file/parts/part-"
 
       - name: Rename parts
         shell: bash
         run: |
           set -e
 
-          cd parts
+          cd artifact/file/parts
 
           i=1
 
           for file in part-*; do
+            [ -f "$file" ] || continue
+
             printf -v newname "part-%04d" "$i"
-            mv "$file" "$newname"
+
+            mv -- "$file" "$newname"
+
             i=$((i + 1))
           done
 
-          cd ..
+          cd ../../..
 
-          echo "Created parts:"
-          ls -lh parts
+          echo "================================"
+          echo "PARTS CREATED"
+          echo "================================"
+
+          find artifact/file/parts \
+            -type f \
+            -printf '%f %s bytes\n' \
+            | sort
 
       - name: Generate SHA256
         shell: bash
         run: |
           set -e
 
-          sha256sum "$FILE" > original.sha256
-          sha256sum parts/* > parts.sha256
+          sha256sum \
+            "artifact/file/$FILE_NAME" \
+            > artifact/file/original.sha256
+
+          (
+            cd artifact/file/parts
+            sha256sum *
+          ) > artifact/file/parts.sha256
+
+          echo "Original SHA256:"
+          cat artifact/file/original.sha256
 
       - name: Generate manifest
         shell: bash
         run: |
           set -e
 
-          FILE_NAME=$(basename "$FILE")
-          FILE_SIZE=$(stat -c%s "$FILE")
-          PART_COUNT=$(find parts -type f | wc -l)
+          PART_COUNT=$(find artifact/file/parts -type f | wc -l)
+
           PART_SIZE="${{ inputs.part_size }} MB"
 
-          cat > manifest.txt <<EOF
-          TG ACTION DOWNLOADER
-          ====================
+          ORIGINAL_SHA256=$(awk '{print $1}' artifact/file/original.sha256)
 
-          File:
-          $FILE_NAME
+          cat > artifact/file/manifest.txt <<EOF
+TG ACTION DOWNLOADER
+====================
 
-          Size:
-          $FILE_SIZE bytes
+File:
+$FILE_NAME
 
-          Parts:
-          $PART_COUNT
+Size:
+$FILE_SIZE bytes
 
-          Part size:
-          $PART_SIZE
+Human Size:
+$(numfmt --to=iec "$FILE_SIZE")
 
-          Original SHA256:
-          $(cat original.sha256)
+Parts:
+$PART_COUNT
 
-          Generated:
-          $(date -u +"%Y-%m-%d %H:%M:%S UTC")
-          EOF
+Part Size:
+$PART_SIZE
 
-          cat manifest.txt
+Original SHA256:
+$ORIGINAL_SHA256
 
-      - name: Prepare artifact
+Generated:
+$(date -u +"%Y-%m-%d %H:%M:%S UTC")
+EOF
+
+          echo "================================"
+          cat artifact/file/manifest.txt
+          echo "================================"
+
+      - name: Show final structure
         shell: bash
         run: |
-          mkdir -p artifact
+          echo "================================"
+          echo "FINAL ARTIFACT"
+          echo "================================"
 
-          cp parts/* artifact/
-          cp original.sha256 artifact/
-          cp parts.sha256 artifact/
-          cp manifest.txt artifact/
+          find artifact -type f -printf '%p - %s bytes\n' | sort
 
-          echo "Final artifact:"
-          ls -lh artifact
+          echo "================================"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
@@ -181,4 +227,5 @@ jobs:
           name: downloaded-files
           path: artifact/
           if-no-files-found: error
+          compression-level: 0
           retention-days: 3
