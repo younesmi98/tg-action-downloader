@@ -1,0 +1,184 @@
+name: TG Action Downloader
+
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: "Direct download URL"
+        required: true
+        type: string
+
+      part_size:
+        description: "Part size in MB"
+        required: false
+        default: "500"
+        type: string
+
+      connections:
+        description: "Number of download connections"
+        required: false
+        default: "16"
+        type: string
+
+jobs:
+  download:
+    name: Download and Split
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y aria2 p7zip-full
+
+      - name: Show settings
+        run: |
+          echo "================================"
+          echo " TG ACTION DOWNLOADER"
+          echo "================================"
+          echo "URL: ${{ inputs.url }}"
+          echo "Part Size: ${{ inputs.part_size }} MB"
+          echo "Connections: ${{ inputs.connections }}"
+          echo "================================"
+
+      - name: Download file
+        shell: bash
+        run: |
+          set -e
+
+          mkdir -p output
+
+          aria2c \
+            --continue=true \
+            --max-connection-per-server="${{ inputs.connections }}" \
+            --split="${{ inputs.connections }}" \
+            --min-split-size=1M \
+            --max-tries=10 \
+            --retry-wait=5 \
+            --timeout=30 \
+            --connect-timeout=30 \
+            --summary-interval=5 \
+            --file-allocation=none \
+            --dir=output \
+            "${{ inputs.url }}"
+
+      - name: Find downloaded file
+        shell: bash
+        run: |
+          set -e
+
+          FILE=$(find output -type f ! -name '*.aria2' | head -n 1)
+
+          if [ -z "$FILE" ]; then
+            echo "ERROR: No downloaded file found."
+            exit 1
+          fi
+
+          echo "Downloaded file:"
+          ls -lh "$FILE"
+
+          echo "FILE=$FILE" >> "$GITHUB_ENV"
+
+      - name: Split file
+        shell: bash
+        run: |
+          set -e
+
+          mkdir -p parts
+
+          SIZE="${{ inputs.part_size }}M"
+
+          echo "Splitting:"
+          echo "$FILE"
+          echo "Part size: $SIZE"
+
+          split \
+            -b "$SIZE" \
+            -d \
+            -a 4 \
+            "$FILE" \
+            "parts/part-"
+
+      - name: Rename parts
+        shell: bash
+        run: |
+          set -e
+
+          cd parts
+
+          i=1
+
+          for file in part-*; do
+            printf -v newname "part-%04d" "$i"
+            mv "$file" "$newname"
+            i=$((i + 1))
+          done
+
+          cd ..
+
+          echo "Created parts:"
+          ls -lh parts
+
+      - name: Generate SHA256
+        shell: bash
+        run: |
+          set -e
+
+          sha256sum "$FILE" > original.sha256
+          sha256sum parts/* > parts.sha256
+
+      - name: Generate manifest
+        shell: bash
+        run: |
+          set -e
+
+          FILE_NAME=$(basename "$FILE")
+          FILE_SIZE=$(stat -c%s "$FILE")
+          PART_COUNT=$(find parts -type f | wc -l)
+          PART_SIZE="${{ inputs.part_size }} MB"
+
+          cat > manifest.txt <<EOF
+          TG ACTION DOWNLOADER
+          ====================
+
+          File:
+          $FILE_NAME
+
+          Size:
+          $FILE_SIZE bytes
+
+          Parts:
+          $PART_COUNT
+
+          Part size:
+          $PART_SIZE
+
+          Original SHA256:
+          $(cat original.sha256)
+
+          Generated:
+          $(date -u +"%Y-%m-%d %H:%M:%S UTC")
+          EOF
+
+          cat manifest.txt
+
+      - name: Prepare artifact
+        shell: bash
+        run: |
+          mkdir -p artifact
+
+          cp parts/* artifact/
+          cp original.sha256 artifact/
+          cp parts.sha256 artifact/
+          cp manifest.txt artifact/
+
+          echo "Final artifact:"
+          ls -lh artifact
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: downloaded-files
+          path: artifact/
+          if-no-files-found: error
+          retention-days: 3
