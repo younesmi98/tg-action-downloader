@@ -83,11 +83,11 @@ jobs:
 
       - name: Create folders
         run: |
-          mkdir -p artifact/file/parts
+          mkdir -p artifact/downloads/parts
 
       - name: Copy original file
         run: |
-          cp -- "$FILE" "artifact/file/$FILE_NAME"
+          cp -- "$FILE" "artifact/downloads/$FILE_NAME"
 
       - name: Split file
         shell: bash
@@ -99,14 +99,14 @@ jobs:
             -d \
             -a 4 \
             "$FILE" \
-            "artifact/file/parts/part-"
+            "artifact/downloads/parts/part-"
 
       - name: Rename parts
         shell: bash
         run: |
           set -e
 
-          cd artifact/file/parts
+          cd artifact/downloads/parts
 
           i=1
 
@@ -122,30 +122,30 @@ jobs:
           cd ../../..
 
           echo "Parts:"
-          find artifact/file/parts -type f -printf "%f %s bytes\n"
+          find artifact/downloads/parts -type f -printf "%f %s bytes\n"
 
       - name: Generate hashes
         shell: bash
         run: |
           set -e
 
-          sha256sum "artifact/file/$FILE_NAME" \
-            > "artifact/file/original.sha256"
+          sha256sum "artifact/downloads/$FILE_NAME" \
+            > "artifact/downloads/original.sha256"
 
-          cd artifact/file/parts
+          cd artifact/downloads/parts
           sha256sum * > ../parts.sha256
           cd ../../..
 
           echo "Original SHA256:"
-          cat artifact/file/original.sha256
+          cat artifact/downloads/original.sha256
 
       - name: Generate manifest
         shell: bash
         run: |
           set -e
 
-          PART_COUNT=$(find artifact/file/parts -type f | wc -l)
-          ORIGINAL_SHA256=$(awk '{print $1}' artifact/file/original.sha256)
+          PART_COUNT=$(find artifact/downloads/parts -type f | wc -l)
+          ORIGINAL_SHA256=$(awk '{print $1}' artifact/downloads/original.sha256)
           HUMAN_SIZE=$(du -h "$FILE" | cut -f1)
 
           {
@@ -175,9 +175,9 @@ jobs:
             echo ""
             echo "Generated:"
             date -u +"%Y-%m-%d %H:%M:%S UTC"
-          } > artifact/file/manifest.txt
+          } > artifact/downloads/manifest.txt
 
-          cat artifact/file/manifest.txt
+          cat artifact/downloads/manifest.txt
 
       - name: Show final structure
         run: |
