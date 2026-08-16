@@ -81,13 +81,13 @@ jobs:
           echo "Size: $FILE_SIZE bytes"
           du -h "$FILE"
 
-      - name: Create folders
+      - name: Create downloads folder
         run: |
-          mkdir -p artifact/downloads/parts
+          mkdir -p downloads/parts
 
       - name: Copy original file
         run: |
-          cp -- "$FILE" "artifact/downloads/$FILE_NAME"
+          cp -- "$FILE" "downloads/$FILE_NAME"
 
       - name: Split file
         shell: bash
@@ -99,14 +99,14 @@ jobs:
             -d \
             -a 4 \
             "$FILE" \
-            "artifact/downloads/parts/part-"
+            "downloads/parts/part-"
 
       - name: Rename parts
         shell: bash
         run: |
           set -e
 
-          cd artifact/downloads/parts
+          cd downloads/parts
 
           i=1
 
@@ -119,33 +119,33 @@ jobs:
             i=$((i + 1))
           done
 
-          cd ../../..
+          cd ..
 
           echo "Parts:"
-          find artifact/downloads/parts -type f -printf "%f %s bytes\n"
+          find parts -type f -printf "%f %s bytes\n"
 
       - name: Generate hashes
         shell: bash
         run: |
           set -e
 
-          sha256sum "artifact/downloads/$FILE_NAME" \
-            > "artifact/downloads/original.sha256"
+          sha256sum "downloads/$FILE_NAME" \
+            > "downloads/original.sha256"
 
-          cd artifact/downloads/parts
+          cd downloads/parts
           sha256sum * > ../parts.sha256
-          cd ../../..
+          cd ..
 
           echo "Original SHA256:"
-          cat artifact/downloads/original.sha256
+          cat original.sha256
 
       - name: Generate manifest
         shell: bash
         run: |
           set -e
 
-          PART_COUNT=$(find artifact/downloads/parts -type f | wc -l)
-          ORIGINAL_SHA256=$(awk '{print $1}' artifact/downloads/original.sha256)
+          PART_COUNT=$(find downloads/parts -type f | wc -l)
+          ORIGINAL_SHA256=$(awk '{print $1}' downloads/original.sha256)
           HUMAN_SIZE=$(du -h "$FILE" | cut -f1)
 
           {
@@ -175,22 +175,22 @@ jobs:
             echo ""
             echo "Generated:"
             date -u +"%Y-%m-%d %H:%M:%S UTC"
-          } > artifact/downloads/manifest.txt
+          } > downloads/manifest.txt
 
-          cat artifact/downloads/manifest.txt
+          cat downloads/manifest.txt
 
       - name: Show final structure
         run: |
-          echo "FINAL ARTIFACT"
-          echo "=============="
+          echo "FINAL WORKSPACE STRUCTURE"
+          echo "========================="
 
-          find artifact -type f -printf "%p - %s bytes\n" | sort
+          find downloads -type f -printf "%p - %s bytes\n" | sort
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
           name: downloaded-files
-          path: artifact/
+          path: downloads/
           if-no-files-found: error
           compression-level: 0
           retention-days: 3
