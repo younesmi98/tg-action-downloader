@@ -7,16 +7,14 @@ on:
         description: "Direct download URL"
         required: true
         type: string
-
       part_size:
         description: "Part size in MB"
-        required: false
-        default: "500"
+        required: true
+        default: "50"
         type: string
-
       connections:
-        description: "Number of download connections"
-        required: false
+        description: "Download connections"
+        required: true
         default: "16"
         type: string
 
@@ -26,22 +24,19 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Install tools
+      - name: Install aria2
         run: |
           sudo apt-get update
           sudo apt-get install -y aria2
 
       - name: Show settings
         run: |
-          echo "================================"
-          echo " TG ACTION DOWNLOADER"
-          echo "================================"
+          echo "TG ACTION DOWNLOADER"
           echo "URL: ${{ inputs.url }}"
-          echo "Part Size: ${{ inputs.part_size }} MB"
-          echo "Connections: ${{ inputs.connections }}"
-          echo "================================"
+          echo "PART SIZE: ${{ inputs.part_size }} MB"
+          echo "CONNECTIONS: ${{ inputs.connections }}"
 
-      - name: Download file
+      - name: Download
         shell: bash
         run: |
           set -e
@@ -63,42 +58,35 @@ jobs:
             --dir=download \
             "${{ inputs.url }}"
 
-      - name: Find downloaded file
+      - name: Find file
         shell: bash
         run: |
           set -e
 
-          FILE=$(find download -type f ! -name '*.aria2' | head -n 1)
+          FILE=$(find download -type f ! -name "*.aria2" | head -n 1)
 
           if [ -z "$FILE" ]; then
-            echo "ERROR: No downloaded file found."
+            echo "No downloaded file found."
             exit 1
           fi
 
           FILE_NAME=$(basename "$FILE")
           FILE_SIZE=$(stat -c%s "$FILE")
 
-          echo "================================"
-          echo "DOWNLOAD COMPLETE"
-          echo "================================"
-          echo "File: $FILE_NAME"
-          echo "Size: $FILE_SIZE bytes"
-          echo "Size: $(du -h "$FILE" | cut -f1)"
-          echo "================================"
-
           echo "FILE=$FILE" >> "$GITHUB_ENV"
           echo "FILE_NAME=$FILE_NAME" >> "$GITHUB_ENV"
           echo "FILE_SIZE=$FILE_SIZE" >> "$GITHUB_ENV"
 
-      - name: Prepare file structure
-        shell: bash
-        run: |
-          set -e
+          echo "File: $FILE_NAME"
+          echo "Size: $FILE_SIZE bytes"
+          du -h "$FILE"
 
-          mkdir -p artifact/file
+      - name: Create folders
+        run: |
           mkdir -p artifact/file/parts
 
-          # Keep the original file completely untouched.
+      - name: Copy original file
+        run: |
           cp -- "$FILE" "artifact/file/$FILE_NAME"
 
       - name: Split file
@@ -106,17 +94,8 @@ jobs:
         run: |
           set -e
 
-          PART_SIZE="${{ inputs.part_size }}M"
-
-          echo "================================"
-          echo "SPLITTING"
-          echo "================================"
-          echo "Source: $FILE"
-          echo "Part size: $PART_SIZE"
-          echo "================================"
-
           split \
-            -b "$PART_SIZE" \
+            -b "${{ inputs.part_size }}M" \
             -d \
             -a 4 \
             "$FILE" \
@@ -134,8 +113,7 @@ jobs:
           for file in part-*; do
             [ -f "$file" ] || continue
 
-            printf -v newname "part-%04d" "$i"
-
+            newname=$(printf "part-%04d" "$i")
             mv -- "$file" "$newname"
 
             i=$((i + 1))
@@ -143,28 +121,20 @@ jobs:
 
           cd ../../..
 
-          echo "================================"
-          echo "PARTS CREATED"
-          echo "================================"
+          echo "Parts:"
+          find artifact/file/parts -type f -printf "%f %s bytes\n"
 
-          find artifact/file/parts \
-            -type f \
-            -printf '%f %s bytes\n' \
-            | sort
-
-      - name: Generate SHA256
+      - name: Generate hashes
         shell: bash
         run: |
           set -e
 
-          sha256sum \
-            "artifact/file/$FILE_NAME" \
-            > artifact/file/original.sha256
+          sha256sum "artifact/file/$FILE_NAME" \
+            > "artifact/file/original.sha256"
 
-          (
-            cd artifact/file/parts
-            sha256sum *
-          ) > artifact/file/parts.sha256
+          cd artifact/file/parts
+          sha256sum * > ../parts.sha256
+          cd ../../..
 
           echo "Original SHA256:"
           cat artifact/file/original.sha256
@@ -175,51 +145,46 @@ jobs:
           set -e
 
           PART_COUNT=$(find artifact/file/parts -type f | wc -l)
-
-          PART_SIZE="${{ inputs.part_size }} MB"
-
           ORIGINAL_SHA256=$(awk '{print $1}' artifact/file/original.sha256)
+          HUMAN_SIZE=$(du -h "$FILE" | cut -f1)
 
-          cat > artifact/file/manifest.txt <<EOF
-TG ACTION DOWNLOADER
-====================
+          {
+            echo "TG ACTION DOWNLOADER"
+            echo "===================="
+            echo ""
+            echo "File:"
+            echo "$FILE_NAME"
+            echo ""
+            echo "Size:"
+            echo "$FILE_SIZE bytes"
+            echo ""
+            echo "Human Size:"
+            echo "$HUMAN_SIZE"
+            echo ""
+            echo "Parts:"
+            echo "$PART_COUNT"
+            echo ""
+            echo "Part Size:"
+            echo "${{ inputs.part_size }} MB"
+            echo ""
+            echo "Connections:"
+            echo "${{ inputs.connections }}"
+            echo ""
+            echo "Original SHA256:"
+            echo "$ORIGINAL_SHA256"
+            echo ""
+            echo "Generated:"
+            date -u +"%Y-%m-%d %H:%M:%S UTC"
+          } > artifact/file/manifest.txt
 
-File:
-$FILE_NAME
-
-Size:
-$FILE_SIZE bytes
-
-Human Size:
-$(numfmt --to=iec "$FILE_SIZE")
-
-Parts:
-$PART_COUNT
-
-Part Size:
-$PART_SIZE
-
-Original SHA256:
-$ORIGINAL_SHA256
-
-Generated:
-$(date -u +"%Y-%m-%d %H:%M:%S UTC")
-EOF
-
-          echo "================================"
           cat artifact/file/manifest.txt
-          echo "================================"
 
       - name: Show final structure
-        shell: bash
         run: |
-          echo "================================"
           echo "FINAL ARTIFACT"
-          echo "================================"
+          echo "=============="
 
-          find artifact -type f -printf '%p - %s bytes\n' | sort
-
-          echo "================================"
+          find artifact -type f -printf "%p - %s bytes\n" | sort
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
